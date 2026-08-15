@@ -118,42 +118,79 @@ def test_build_prompt_marks_missing_indicator():
     assert "nicht verfuegbar" in prompt
 
 
-# --- call_llm() -- Outside Voice #4 (Plausibilitaet) + #5 (Retry) ---
+# --- call_llm() -- Outside Voice #4 (Plausibilitaet) + #5 (Retry) + Provider-Fallback ---
 
 
 def test_call_llm_raises_on_empty_response():
-    with patch("stock_check.core._call_llm_once", return_value=""):
-        with pytest.raises(StockCheckError, match="unbrauchbar"):
-            call_llm("irgendein prompt")
+    with patch("stock_check.core.os.environ", {"LLM_PROVIDER": "anthropic"}):
+        with patch("stock_check.core._call_llm_anthropic", return_value=""):
+            with pytest.raises(StockCheckError, match="unbrauchbar"):
+                call_llm("irgendein prompt")
 
 
 def test_call_llm_raises_on_too_short_response():
-    with patch("stock_check.core._call_llm_once", return_value="ok"):
-        with pytest.raises(StockCheckError, match="unbrauchbar"):
-            call_llm("irgendein prompt")
+    with patch("stock_check.core.os.environ", {"LLM_PROVIDER": "anthropic"}):
+        with patch("stock_check.core._call_llm_anthropic", return_value="ok"):
+            with pytest.raises(StockCheckError, match="unbrauchbar"):
+                call_llm("irgendein prompt")
 
 
 def test_call_llm_returns_valid_response():
     lange_antwort = "x" * 100
-    with patch("stock_check.core._call_llm_once", return_value=lange_antwort):
-        assert call_llm("irgendein prompt") == lange_antwort
+    with patch("stock_check.core.os.environ", {"LLM_PROVIDER": "anthropic"}):
+        with patch("stock_check.core._call_llm_anthropic", return_value=lange_antwort):
+            assert call_llm("irgendein prompt") == lange_antwort
 
 
 def test_call_llm_retries_on_transient_error_then_succeeds():
     lange_antwort = "x" * 100
-    with patch(
-        "stock_check.core._call_llm_once",
-        side_effect=[Exception("503 UNAVAILABLE"), lange_antwort],
-    ):
-        with patch("stock_check.core.time.sleep"):
-            assert call_llm("irgendein prompt") == lange_antwort
+    with patch("stock_check.core.os.environ", {"LLM_PROVIDER": "anthropic"}):
+        with patch(
+            "stock_check.core._call_llm_anthropic",
+            side_effect=[Exception("503 UNAVAILABLE"), lange_antwort],
+        ):
+            with patch("stock_check.core.time.sleep"):
+                assert call_llm("irgendein prompt") == lange_antwort
 
 
 def test_call_llm_gives_up_after_max_retries():
-    with patch("stock_check.core._call_llm_once", side_effect=Exception("503 UNAVAILABLE")):
-        with patch("stock_check.core.time.sleep"):
-            with pytest.raises(StockCheckError, match="fehlgeschlagen"):
-                call_llm("irgendein prompt")
+    with patch("stock_check.core.os.environ", {"LLM_PROVIDER": "anthropic"}):
+        with patch("stock_check.core._call_llm_anthropic", side_effect=Exception("503 UNAVAILABLE")):
+            with patch("stock_check.core.time.sleep"):
+                with pytest.raises(StockCheckError, match="fehlgeschlagen"):
+                    call_llm("irgendein prompt")
+
+
+def test_call_llm_raises_when_no_provider_configured():
+    with patch("stock_check.core.os.environ", {}):
+        with pytest.raises(StockCheckError, match="Kein KI-Provider konfiguriert"):
+            call_llm("irgendein prompt")
+
+
+def test_call_llm_falls_back_to_next_provider_when_first_fails():
+    """Der eigentliche Bugfix: Anthropic ohne Guthaben darf die Haupt-
+    Analyse nicht mehr komplett blockieren, wenn Gemini konfiguriert ist."""
+    lange_antwort = "x" * 100
+    env = {"ANTHROPIC_API_KEY": "dummy", "GEMINI_API_KEY": "dummy"}
+    with patch("stock_check.core.os.environ", env):
+        with patch(
+            "stock_check.core._call_llm_anthropic",
+            side_effect=Exception("credit balance too low"),
+        ):
+            with patch("stock_check.core._call_llm_gemini", return_value=lange_antwort):
+                with patch("stock_check.core.time.sleep"):
+                    assert call_llm("irgendein prompt") == lange_antwort
+
+
+def test_call_llm_skips_unconfigured_providers_in_fallback():
+    lange_antwort = "x" * 100
+    env = {"OPENROUTER_API_KEY": "dummy"}
+    with patch("stock_check.core.os.environ", env):
+        with patch(
+            "stock_check.core._call_llm_openrouter",
+            return_value=lange_antwort,
+        ):
+            assert call_llm("irgendein prompt") == lange_antwort
 
 
 # --- ask_all_providers() -- Multi-KI (TODO 1 / Approach B, freie Frage) ---

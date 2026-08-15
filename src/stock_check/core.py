@@ -239,11 +239,39 @@ def _call_llm_openrouter(prompt: str, model: str) -> str:
     return response.choices[0].message.content
 
 
-def _call_llm_once(prompt: str) -> str:
-    provider = os.environ.get("LLM_PROVIDER", "anthropic")
-    if provider == "gemini":
-        return _call_llm_gemini(prompt)
-    return _call_llm_anthropic(prompt)
+# Multi-KI-Vergleich (TODO 1 / Approach B, freie Frage): jeder Eintrag ist
+# unabhaengig -- ein fehlender Key oder ein Fehler bei einem Provider stoppt
+# nicht die anderen. Reihenfolge hier ist auch die Fallback-Reihenfolge fuer
+# call_llm() (Haupt-Analyse, eine KI-Antwort).
+PROVIDERS = [
+    {
+        "id": "anthropic",
+        "name": "Claude (Anthropic)",
+        "env_key": "ANTHROPIC_API_KEY",
+        # Lambda statt direkter Funktionsreferenz: bindet _call_llm_anthropic
+        # erst beim Aufruf, nicht beim Modul-Import -- sonst greifen
+        # unittest.mock-Patches auf die frueh gebundene Referenz nicht.
+        "call": lambda prompt: _call_llm_anthropic(prompt),
+    },
+    {
+        "id": "gemini",
+        "name": "Gemini (Google)",
+        "env_key": "GEMINI_API_KEY",
+        "call": lambda prompt: _call_llm_gemini(prompt),
+    },
+    {
+        "id": "openrouter-nvidia",
+        "name": "Nemotron Ultra (NVIDIA, via OpenRouter)",
+        "env_key": "OPENROUTER_API_KEY",
+        "call": lambda prompt: _call_llm_openrouter(prompt, "nvidia/nemotron-3-ultra-550b-a55b:free"),
+    },
+    {
+        "id": "openrouter-openai",
+        "name": "GPT-OSS-20B (OpenAI, via OpenRouter)",
+        "env_key": "OPENROUTER_API_KEY",
+        "call": lambda prompt: _call_llm_openrouter(prompt, "openai/gpt-oss-20b:free"),
+    },
+]
 
 
 def _call_with_retry(call_fn) -> str:
@@ -272,30 +300,39 @@ def _call_with_retry(call_fn) -> str:
 
 
 def call_llm(prompt: str) -> str:
-    """Ruft die per LLM_PROVIDER konfigurierte KI-API auf (Approach A,
-    eine KI pro Durchlauf)."""
-    return _call_with_retry(lambda: _call_llm_once(prompt))
+    """Haupt-Analyse (Approach A, eine KI-Antwort). LLM_PROVIDER erzwingt
+    optional einen einzelnen Provider (z.B. fuer T0-Tests); ist es NICHT
+    gesetzt, wird die PROVIDERS-Reihenfolge automatisch durchprobiert --
+    schlaegt der erste konfigurierte Provider fehl (z.B. Anthropic ohne
+    Guthaben), verhindert das nicht mehr die gesamte Ticker-Analyse."""
+    forcierter_provider = os.environ.get("LLM_PROVIDER")
+    if forcierter_provider:
+        provider = next((p for p in PROVIDERS if p["id"] == forcierter_provider), None)
+        if provider is None:
+            raise StockCheckError(
+                "Unbekannter LLM_PROVIDER",
+                f"'{forcierter_provider}' ist keiner der bekannten Provider ({[p['id'] for p in PROVIDERS]})",
+            )
+        return _call_with_retry(lambda: provider["call"](prompt))
 
+    letzter_fehler: StockCheckError | None = None
+    versucht = False
+    for provider in PROVIDERS:
+        if not os.environ.get(provider["env_key"]):
+            continue
+        versucht = True
+        try:
+            return _call_with_retry(lambda p=provider: p["call"](prompt))
+        except StockCheckError as e:
+            letzter_fehler = e
+            continue
 
-# Multi-KI-Vergleich (TODO 1 / Approach B, freie Frage): jeder Eintrag ist
-# unabhaengig -- ein fehlender Key oder ein Fehler bei einem Provider stoppt
-# nicht die anderen.
-PROVIDERS = [
-    {"id": "anthropic", "name": "Claude (Anthropic)", "env_key": "ANTHROPIC_API_KEY", "call": _call_llm_anthropic},
-    {"id": "gemini", "name": "Gemini (Google)", "env_key": "GEMINI_API_KEY", "call": _call_llm_gemini},
-    {
-        "id": "openrouter-nvidia",
-        "name": "Nemotron Ultra (NVIDIA, via OpenRouter)",
-        "env_key": "OPENROUTER_API_KEY",
-        "call": lambda prompt: _call_llm_openrouter(prompt, "nvidia/nemotron-3-ultra-550b-a55b:free"),
-    },
-    {
-        "id": "openrouter-openai",
-        "name": "GPT-OSS-20B (OpenAI, via OpenRouter)",
-        "env_key": "OPENROUTER_API_KEY",
-        "call": lambda prompt: _call_llm_openrouter(prompt, "openai/gpt-oss-20b:free"),
-    },
-]
+    if not versucht:
+        raise StockCheckError(
+            "Kein KI-Provider konfiguriert",
+            "keiner der API-Keys (ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY) ist gesetzt",
+        )
+    raise letzter_fehler
 
 
 def ask_all_providers(prompt: str) -> list[dict]:
