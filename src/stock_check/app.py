@@ -31,6 +31,18 @@ from stock_check.core import (
 
 load_dotenv()
 
+# Streamlit Clouds automatische Secrets-zu-Umgebungsvariablen-Uebertragung
+# war unzuverlaessig (Anthropic-SDK meldete "kein Key gefunden" trotz
+# gesetztem Secret) -- deshalb hier explizit st.secrets nach os.environ
+# spiegeln, damit core.py (das bewusst kein Streamlit kennt und nur
+# os.environ liest) ueberall konsistent funktioniert. try/except: lokal
+# ohne .streamlit/secrets.toml wirft st.secrets einen Fehler, das ist ok.
+try:
+    for _key, _value in st.secrets.items():
+        os.environ.setdefault(_key, str(_value))
+except Exception:
+    pass
+
 st.set_page_config(page_title="Aktien-Analyse-Assistent", page_icon="\U0001F4C8", layout="centered")
 
 # Zugangs-Gate: aktiv NUR wenn APP_PASSWORD gesetzt ist (z.B. beim Deployment
