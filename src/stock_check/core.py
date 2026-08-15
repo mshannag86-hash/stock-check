@@ -175,7 +175,20 @@ def fetch_fundamentals(ticker: str) -> dict:
         "ROA": info.get("returnOnAssets", "nicht verfuegbar"),
         "Verschuldungsgrad_DebtToEquity": info.get("debtToEquity", "nicht verfuegbar"),
         "Analysten_Kursziel_Durchschnitt": info.get("targetMeanPrice", "nicht verfuegbar"),
+        "Naechste_Quartalszahlen": fetch_next_earnings_date(ticker),
     }
+
+
+def fetch_next_earnings_date(ticker: str) -> str:
+    """Termin der naechsten Quartalszahlen -- wichtiger Kontext fuer Timing-
+    Fragen (z.B. erhoehte Volatilitaet kurz vor der Veroeffentlichung)."""
+    try:
+        termine = yf.Ticker(ticker).calendar.get("Earnings Date")
+    except Exception:
+        return "nicht verfuegbar"
+    if not termine:
+        return "nicht verfuegbar"
+    return str(termine[0])
 
 
 def build_prompt(ticker: str, indicators: dict, fundamentals: dict) -> str:

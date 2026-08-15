@@ -165,6 +165,7 @@ LABEL_ANZEIGE = {
     "Volumen_20T_Durchschnitt": "Ø Volumen (20T)",
     "Verschuldungsgrad_DebtToEquity": "Verschuldungsgrad",
     "Analysten_Kursziel_Durchschnitt": "Ø Kursziel (Analysten)",
+    "Naechste_Quartalszahlen": "Nächste Quartalszahlen",
     "Waehrung": "Währung",
 }
 
