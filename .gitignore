@@ -14,3 +14,4 @@ wheels/
 # Generierte Analyse-Ausgaben und lokale Secrets
 output/
 .streamlit/secrets.toml
+prototype.py
