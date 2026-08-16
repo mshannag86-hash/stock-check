@@ -65,38 +65,42 @@ if _APP_PASSWORD:
                 st.error("Falsches Passwort.")
         st.stop()
 
-# Modernes Erscheinungsbild: Inter-Schrift, geglaettete Karten fuer
-# Kennzahlen/Chart, dezente Rundungen statt Streamlit-Standardlook.
+# Apple-inspiriertes Erscheinungsbild: viel Weissraum, grosse mutige
+# Typografie, kaum Rahmen (stattdessen sanfte Schatten), ein einziger
+# Akzentton, pillenfoermige Buttons statt Streamlit-Standardlook.
+# -apple-system zuerst in der Font-Stack: rendert auf Mac/iOS als echtes
+# SF Pro, Inter ist nur der Fallback fuer andere Plattformen.
 st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
     html, body, [class*="css"] {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
     }
 
     .block-container {
-        max-width: 880px;
-        padding-top: 2.5rem;
-        padding-bottom: 3rem;
+        max-width: 720px;
+        padding-top: 4.5rem;
+        padding-bottom: 4rem;
     }
 
     [data-testid="stMetric"] {
-        background: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 12px;
-        padding: 0.9rem 1rem 0.7rem 1rem;
+        background: #FFFFFF;
+        border: none;
+        border-radius: 20px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+        padding: 1.3rem 1.2rem 1.1rem 1.2rem;
     }
     [data-testid="stMetricLabel"] {
-        font-size: 0.78rem;
-        font-weight: 600;
-        color: #64748B;
+        font-size: 0.76rem;
+        font-weight: 500;
+        color: #86868B;
         text-transform: uppercase;
-        letter-spacing: 0.03em;
+        letter-spacing: 0.04em;
         white-space: normal !important;
         overflow: visible !important;
-        line-height: 1.25;
+        line-height: 1.3;
     }
     [data-testid="stMetricLabel"] p {
         white-space: normal !important;
@@ -104,43 +108,77 @@ st.markdown(
         text-overflow: unset !important;
     }
     [data-testid="stMetricValue"] {
-        font-weight: 700;
-        color: #0F172A;
+        font-weight: 600;
+        color: #1D1D1F;
+        letter-spacing: -0.01em;
+        white-space: normal !important;
+        overflow: visible !important;
+    }
+    [data-testid="stMetricValue"] div, [data-testid="stMetricValue"] p {
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: unset !important;
     }
 
     [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea {
-        border-radius: 10px !important;
+        border-radius: 14px !important;
+        border: 1px solid #D2D2D7 !important;
+        padding: 0.7rem 1rem !important;
     }
 
+    /* Pillenfoermige Buttons -- Apples Signature-Element */
     .stButton > button {
-        border-radius: 10px;
-        font-weight: 600;
-        padding: 0.5rem 1.4rem;
+        border-radius: 980px;
+        font-weight: 500;
+        padding: 0.55rem 1.7rem;
+        border: none;
+    }
+    .stButton > button[kind="primary"] {
+        background: #0071E3;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: #0077ED;
     }
 
     [data-testid="stVerticalBlockBorderWrapper"] {
-        border-radius: 14px !important;
+        border: none !important;
+        border-radius: 20px !important;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+        background: #FFFFFF;
     }
 
     .hero-eyebrow {
-        color: #2563EB;
-        font-weight: 700;
-        font-size: 0.85rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        margin-bottom: 0.2rem;
+        color: #0071E3;
+        font-weight: 600;
+        font-size: 0.9rem;
+        letter-spacing: 0.02em;
+        margin-bottom: 0.6rem;
+        text-align: center;
     }
     .hero-title {
-        font-size: 2.1rem;
-        font-weight: 800;
-        color: #0F172A;
-        letter-spacing: -0.02em;
-        margin-bottom: 0.3rem;
+        font-size: 3.2rem;
+        font-weight: 700;
+        color: #1D1D1F;
+        letter-spacing: -0.03em;
+        line-height: 1.08;
+        margin-bottom: 0.9rem;
+        text-align: center;
     }
     .hero-subtitle {
-        color: #64748B;
-        font-size: 1rem;
-        margin-bottom: 1.6rem;
+        color: #86868B;
+        font-size: 1.2rem;
+        font-weight: 400;
+        line-height: 1.4;
+        margin-bottom: 2.8rem;
+        text-align: center;
+    }
+    .section-label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #86868B;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin: 1.6rem 0 0.7rem 0;
     }
     </style>
     """,
@@ -149,9 +187,9 @@ st.markdown(
 
 st.markdown(
     """
-    <div class="hero-eyebrow">📈 Aktien-Analyse-Assistent</div>
-    <div class="hero-title">Ticker rein, Klarheit raus.</div>
-    <div class="hero-subtitle">Echte Kennzahlen berechnen, KI-Einschätzung auf dieser Basis erhalten — statt Tabs zu jonglieren.</div>
+    <div class="hero-eyebrow">Aktien-Analyse-Assistent</div>
+    <div class="hero-title">Ticker rein.<br>Klarheit raus.</div>
+    <div class="hero-subtitle">Echte Kennzahlen berechnen. KI-Einschätzung erhalten.<br>Statt Tabs zu jonglieren.</div>
     """,
     unsafe_allow_html=True,
 )
@@ -315,7 +353,7 @@ def analysiere_ticker(roh_ticker: str) -> tuple[str, dict, dict] | None:
             st.error(f"**{ticker}** -- Fehler: {e.was} -- {e.warum}")
             return None
 
-    st.markdown("#### 🤖 KI-Einschätzung")
+    st.markdown('<div class="section-label">KI-Einschätzung</div>', unsafe_allow_html=True)
     with st.container(border=True):
         st.markdown(antwort)
 
@@ -355,8 +393,7 @@ elif analysieren:
 # --- Eigene Frage an alle konfigurierten KIs (TODO 1 / Approach B) ---
 
 if st.session_state.analysierte_ticker:
-    st.divider()
-    st.markdown("### 💬 Eigene Frage stellen")
+    st.markdown('<div class="section-label">Eigene Frage stellen</div>', unsafe_allow_html=True)
     st.caption(
         "Wird zusammen mit denselben berechneten Kennzahlen an alle konfigurierten KIs geschickt "
         "(Claude, Gemini, sowie zwei Modelle ueber OpenRouter). Fehlt ein API-Key oder schlaegt "
