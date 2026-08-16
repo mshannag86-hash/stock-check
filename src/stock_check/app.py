@@ -371,10 +371,14 @@ def berechne_ticker(roh_ticker: str) -> str | None:
             st.error(f"**{ticker}** -- Fehler: {e.was} -- {e.warum}")
             return None
 
-    indicators = compute_indicators(price_data)
-    fundamentals = fetch_fundamentals(ticker)
-    exchange_info = fetch_exchange_info(ticker)
-    chart_data = build_chart_data(price_data)
+    try:
+        indicators = compute_indicators(price_data)
+        fundamentals = fetch_fundamentals(ticker)
+        exchange_info = fetch_exchange_info(ticker)
+        chart_data = build_chart_data(price_data)
+    except StockCheckError as e:
+        st.error(f"**{ticker}** -- Fehler: {e.was} -- {e.warum}")
+        return None
 
     alle_kennzahlen = {
         "Handelsplatz": exchange_info["handelsplatz"],

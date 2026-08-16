@@ -81,7 +81,17 @@ def validate_ticker(ticker: str) -> str:
 
 
 def fetch_price_data(ticker: str) -> pd.DataFrame:
-    price_data = yf.Ticker(ticker).history(period="2y")
+    try:
+        price_data = yf.Ticker(ticker).history(period="2y")
+    except Exception as e:
+        # yfinance wirft eigene Exceptions (z.B. YFRateLimitError bei zu
+        # vielen Anfragen), die unbehandelt die ganze App abstuerzen liessen
+        # statt eine saubere Fehlermeldung zu zeigen -- daher hier gefangen
+        # und in den Fehler-Kontrakt uebersetzt.
+        raise StockCheckError(
+            f"Kursdaten fuer '{ticker}' konnten nicht geladen werden",
+            f"yfinance-Fehler: {e}",
+        ) from e
     if price_data.empty:
         raise StockCheckError(
             f"Keine Kursdaten fuer '{ticker}'",
@@ -155,12 +165,25 @@ def compute_indicators(price_data: pd.DataFrame) -> dict:
     return indicators
 
 
+def _fetch_yf_info(ticker: str) -> dict:
+    """Gemeinsamer .info-Abruf fuer fetch_exchange_info() und
+    fetch_fundamentals() -- faengt yfinance-Exceptions (z.B.
+    YFRateLimitError), die sonst unbehandelt die App abstuerzen liessen."""
+    try:
+        return yf.Ticker(ticker).info
+    except Exception as e:
+        raise StockCheckError(
+            f"Unternehmensdaten fuer '{ticker}' konnten nicht geladen werden",
+            f"yfinance-Fehler: {e}",
+        ) from e
+
+
 def fetch_exchange_info(ticker: str) -> dict:
     """Dual-gelistete Aktien (z.B. ADS auf Nasdaq vs. Stammaktie auf
     Euronext) haben unterschiedliche Kurse in unterschiedlicher Waehrung
     fuer denselben Ticker-Namensraum -- ohne diese Info wirkt ein korrekter
     Kurs wie ein Datenfehler, wenn man ihn mit einer anderen Boerse vergleicht."""
-    info = yf.Ticker(ticker).info
+    info = _fetch_yf_info(ticker)
     return {
         "handelsplatz": info.get("fullExchangeName", "unbekannt"),
         "waehrung": info.get("currency", "unbekannt"),
@@ -168,7 +191,7 @@ def fetch_exchange_info(ticker: str) -> dict:
 
 
 def fetch_fundamentals(ticker: str) -> dict:
-    info = yf.Ticker(ticker).info
+    info = _fetch_yf_info(ticker)
     return {
         "KGV": info.get("trailingPE", "nicht verfuegbar"),
         "KBV": info.get("priceToBook", "nicht verfuegbar"),
