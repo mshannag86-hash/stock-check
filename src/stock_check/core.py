@@ -11,10 +11,12 @@ import re
 import time
 
 import anthropic
+import bcrypt
 import openai
 import pandas as pd
 import yfinance as yf
 from google import genai
+from supabase import create_client
 
 TICKER_PATTERN = re.compile(r"^[A-Za-z0-9.\-]{1,15}$")
 
@@ -391,3 +393,89 @@ def write_output(ticker: str, datum: str, content: str, output_dir: str = "outpu
             f"Konnte Ausgabedatei fuer '{ticker}' nicht schreiben",
             str(e),
         ) from e
+
+
+# --- Accounts + Watchlist (Supabase) ---
+#
+# Eigene Registrierung/Login statt eines einzelnen geteilten Passworts, damit
+# jede Person ihre eigene, dauerhafte Watchlist hat (ueberlebt Streamlit-
+# Cloud-Neustarts, im Gegensatz zu einer lokalen Datei oder Browser-
+# localStorage). Registrierung braucht zusaetzlich das bestehende
+# Einladungswort (REGISTRATION_INVITE_CODE), damit nicht jeder x-beliebige
+# Besucher sich selbst einen Account anlegen und die KI-Kontingente
+# verbrauchen kann.
+
+
+def _get_supabase_client():
+    return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return bcrypt.checkpw(password.encode(), password_hash.encode())
+
+
+def register_user(username: str, password: str, invite_code: str) -> dict:
+    username = username.strip()
+    erwarteter_code = os.environ.get("REGISTRATION_INVITE_CODE")
+    if erwarteter_code and invite_code != erwarteter_code:
+        raise StockCheckError("Registrierung fehlgeschlagen", "Einladungscode ist falsch")
+    if not username or not password:
+        raise StockCheckError(
+            "Registrierung fehlgeschlagen", "Benutzername und Passwort duerfen nicht leer sein"
+        )
+
+    client = _get_supabase_client()
+    vorhanden = client.table("users").select("id").eq("username", username).execute()
+    if vorhanden.data:
+        raise StockCheckError(
+            "Registrierung fehlgeschlagen", f"Benutzername '{username}' ist bereits vergeben"
+        )
+
+    ergebnis = client.table("users").insert(
+        {"username": username, "password_hash": hash_password(password)}
+    ).execute()
+    return ergebnis.data[0]
+
+
+def login_user(username: str, password: str) -> dict:
+    client = _get_supabase_client()
+    ergebnis = client.table("users").select("*").eq("username", username.strip()).execute()
+    # Dieselbe generische Fehlermeldung fuer "Nutzer existiert nicht" und
+    # "Passwort falsch" -- verhindert, dass sich existierende Benutzernamen
+    # erraten lassen.
+    if not ergebnis.data or not verify_password(password, ergebnis.data[0]["password_hash"]):
+        raise StockCheckError("Anmeldung fehlgeschlagen", "Benutzername oder Passwort falsch")
+    return ergebnis.data[0]
+
+
+def get_watchlist(user_id: str) -> list[str]:
+    client = _get_supabase_client()
+    ergebnis = (
+        client.table("watchlist")
+        .select("ticker")
+        .eq("user_id", user_id)
+        .order("added_at")
+        .execute()
+    )
+    return [zeile["ticker"] for zeile in ergebnis.data]
+
+
+def add_to_watchlist(user_id: str, ticker: str) -> None:
+    client = _get_supabase_client()
+    try:
+        client.table("watchlist").insert({"user_id": user_id, "ticker": ticker}).execute()
+    except Exception as e:
+        # Ticker ist schon in der Watchlist (unique-Constraint) -- kein Fehler,
+        # einfach idempotent behandeln.
+        if "duplicate" in str(e).lower() or "unique" in str(e).lower():
+            return
+        raise StockCheckError(f"Konnte '{ticker}' nicht zur Watchlist hinzufuegen", str(e)) from e
+
+
+def remove_from_watchlist(user_id: str, ticker: str) -> None:
+    client = _get_supabase_client()
+    client.table("watchlist").delete().eq("user_id", user_id).eq("ticker", ticker).execute()

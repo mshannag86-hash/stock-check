@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from stock_check.core import (
     StockCheckError,
+    add_to_watchlist,
     ask_all_providers,
     build_chart_data,
     build_freeform_prompt,
@@ -25,6 +26,10 @@ from stock_check.core import (
     fetch_exchange_info,
     fetch_fundamentals,
     fetch_price_data,
+    get_watchlist,
+    login_user,
+    register_user,
+    remove_from_watchlist,
     validate_ticker,
     write_output,
 )
@@ -45,24 +50,43 @@ except Exception:
 
 st.set_page_config(page_title="Aktien-Analyse-Assistent", page_icon="\U0001F4C8", layout="centered")
 
-# Zugangs-Gate: aktiv NUR wenn APP_PASSWORD gesetzt ist (z.B. beim Deployment
-# auf Streamlit Community Cloud) -- lokale Entwicklung ohne gesetztes
-# Passwort bleibt reibungslos offen. Verhindert, dass irgendwer mit dem
-# oeffentlichen Link die (kostenpflichtigen/limitierten) KI-Kontingente
-# des Betreibers verbraucht.
-_APP_PASSWORD = os.environ.get("APP_PASSWORD")
-if _APP_PASSWORD:
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-    if not st.session_state.authenticated:
-        st.title("\U0001F512 Zugang")
-        eingabe = st.text_input("Passwort", type="password")
-        if st.button("Anmelden", type="primary"):
-            if eingabe == _APP_PASSWORD:
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("Falsches Passwort.")
+# Zugangs-Gate: eigener Account pro Person statt einem einzelnen geteilten
+# Passwort -- jede Person bekommt dadurch eine eigene, dauerhafte Watchlist
+# (ueberlebt Streamlit-Cloud-Neustarts im Gegensatz zu einer lokalen Datei
+# oder Browser-localStorage). Registrierung braucht zusaetzlich das
+# bestehende Einladungswort (REGISTRATION_INVITE_CODE), damit nicht jeder
+# x-beliebige Besucher sich selbst einen Account anlegen und die
+# KI-Kontingente des Betreibers verbrauchen kann. Nur aktiv, wenn
+# SUPABASE_URL konfiguriert ist -- lokale Entwicklung ohne Supabase bleibt
+# reibungslos offen.
+if os.environ.get("SUPABASE_URL"):
+    if "user" not in st.session_state:
+        st.session_state.user = None
+    if st.session_state.user is None:
+        st.title("\U0001F512 Anmelden")
+        login_tab, register_tab = st.tabs(["Anmelden", "Registrieren"])
+
+        with login_tab:
+            login_name = st.text_input("Benutzername", key="login_name")
+            login_pw = st.text_input("Passwort", type="password", key="login_pw")
+            if st.button("Anmelden", type="primary", key="login_button"):
+                try:
+                    st.session_state.user = login_user(login_name, login_pw)
+                    st.rerun()
+                except StockCheckError as e:
+                    st.error(e.warum)
+
+        with register_tab:
+            reg_name = st.text_input("Benutzername", key="reg_name")
+            reg_pw = st.text_input("Passwort", type="password", key="reg_pw")
+            reg_invite = st.text_input("Einladungscode", type="password", key="reg_invite")
+            if st.button("Registrieren", type="primary", key="register_button"):
+                try:
+                    st.session_state.user = register_user(reg_name, reg_pw, reg_invite)
+                    st.rerun()
+                except StockCheckError as e:
+                    st.error(e.warum)
+
         st.stop()
 
 # Apple-inspiriertes Erscheinungsbild: viel Weissraum, grosse mutige
@@ -194,6 +218,32 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if os.environ.get("SUPABASE_URL") and st.session_state.get("user"):
+    kopf_links, kopf_rechts = st.columns([4, 1])
+    with kopf_links:
+        st.caption(f"Angemeldet als **{st.session_state.user['username']}**")
+    with kopf_rechts:
+        if st.button("Abmelden"):
+            st.session_state.user = None
+            st.rerun()
+
+watchlist_ticker_zum_analysieren = None
+if os.environ.get("SUPABASE_URL") and st.session_state.get("user"):
+    watchlist = get_watchlist(st.session_state.user["id"])
+    if watchlist:
+        st.markdown('<div class="section-label">Watchlist</div>', unsafe_allow_html=True)
+        for wl_ticker in watchlist:
+            wl_spalte_name, wl_spalte_analysieren, wl_spalte_entfernen = st.columns([3, 2, 1])
+            with wl_spalte_name:
+                st.markdown(f"**{wl_ticker}**")
+            with wl_spalte_analysieren:
+                if st.button("Analysieren", key=f"wl_analysieren_{wl_ticker}"):
+                    watchlist_ticker_zum_analysieren = wl_ticker
+            with wl_spalte_entfernen:
+                if st.button("✕", key=f"wl_entfernen_{wl_ticker}"):
+                    remove_from_watchlist(st.session_state.user["id"], wl_ticker)
+                    st.rerun()
+
 ticker_input = st.text_input(
     "Ticker (mehrere durch Komma trennen, z.B. AAPL, MSFT, NVDA)",
     placeholder="AAPL",
@@ -301,7 +351,14 @@ def build_chart_figure(ticker: str, chart_data, indicators: dict) -> go.Figure:
     return fig
 
 
-def analysiere_ticker(roh_ticker: str) -> tuple[str, dict, dict] | None:
+def berechne_ticker(roh_ticker: str) -> str | None:
+    """Holt Daten + KI-Einschaetzung und legt alles in st.session_state ab.
+    Reine Rechenarbeit, KEINE Anzeige -- die uebernimmt render_ticker_ergebnis(),
+    das bei JEDEM Rerun aus session_state neu zeichnet. Trennung noetig, weil
+    Streamlit-Widgets (z.B. der Watchlist-Button) nur interaktiv bleiben, wenn
+    sie bei jedem Durchlauf neu erzeugt werden -- nicht nur direkt nach der
+    Berechnung (sonst verschwindet z.B. der Watchlist-Klick wirkungslos,
+    sobald irgendein anderer Button denselben Rerun ausloest)."""
     ticker = roh_ticker.strip()
     if not ticker:
         return None
@@ -317,45 +374,22 @@ def analysiere_ticker(roh_ticker: str) -> tuple[str, dict, dict] | None:
     indicators = compute_indicators(price_data)
     fundamentals = fetch_fundamentals(ticker)
     exchange_info = fetch_exchange_info(ticker)
+    chart_data = build_chart_data(price_data)
 
-    st.subheader(ticker)
-    st.caption(
-        f"Handelsplatz: {exchange_info['handelsplatz']} | Waehrung: {exchange_info['waehrung']} "
-        "-- Achtung bei dual-gelisteten Aktien (z.B. ADS vs. Stammaktie): "
-        "andere Boerse kann einen deutlich anderen Kurs zeigen."
-    )
-
-    with st.container(border=True):
-        chart_data = build_chart_data(price_data)
-        st.plotly_chart(build_chart_figure(ticker, chart_data, indicators), use_container_width=True)
-
-        alle_kennzahlen = {
-            "Handelsplatz": exchange_info["handelsplatz"],
-            "Waehrung": exchange_info["waehrung"],
-            **indicators,
-            **fundamentals,
-        }
-        kennzahlen_spalten = st.columns(3)
-        for i, (name, wert) in enumerate(alle_kennzahlen.items()):
-            with kennzahlen_spalten[i % 3]:
-                st.metric(label=format_label(name), value=format_kennzahl(name, wert))
+    alle_kennzahlen = {
+        "Handelsplatz": exchange_info["handelsplatz"],
+        "Waehrung": exchange_info["waehrung"],
+        **indicators,
+        **fundamentals,
+    }
 
     with st.spinner(f"{ticker}: KI-Einschaetzung wird eingeholt..."):
         try:
-            fundamentals_mit_boerse = {
-                "Handelsplatz": exchange_info["handelsplatz"],
-                "Waehrung": exchange_info["waehrung"],
-                **fundamentals,
-            }
-            prompt = build_prompt(ticker, indicators, fundamentals_mit_boerse)
+            prompt = build_prompt(ticker, indicators, alle_kennzahlen)
             antwort = call_llm(prompt)
         except StockCheckError as e:
             st.error(f"**{ticker}** -- Fehler: {e.was} -- {e.warum}")
             return None
-
-    st.markdown('<div class="section-label">KI-Einschätzung</div>', unsafe_allow_html=True)
-    with st.container(border=True):
-        st.markdown(antwort)
 
     content = f"""# {ticker} -- {date.today().isoformat()}
 
@@ -369,25 +403,82 @@ def analysiere_ticker(roh_ticker: str) -> tuple[str, dict, dict] | None:
 """
     try:
         pfad = write_output(ticker, date.today().isoformat(), content)
-        st.caption(f"Gespeichert unter: {pfad}")
     except StockCheckError as e:
-        st.warning(f"Ergebnis wurde angezeigt, aber nicht gespeichert: {e.was} -- {e.warum}")
+        pfad = None
+        st.warning(f"Ergebnis wird angezeigt, aber nicht gespeichert: {e.was} -- {e.warum}")
 
-    return ticker, indicators, fundamentals_mit_boerse
+    st.session_state.analysierte_ticker[ticker] = {
+        "indicators": indicators,
+        "fundamentals_mit_boerse": alle_kennzahlen,
+        "exchange_info": exchange_info,
+        "chart_data": chart_data,
+        "antwort": antwort,
+        "pfad": pfad,
+    }
+    return ticker
+
+
+def render_ticker_ergebnis(ticker: str, daten: dict) -> None:
+    """Zeichnet ein bereits berechnetes Ticker-Ergebnis aus session_state --
+    wird bei JEDEM Rerun fuer jeden gespeicherten Ticker aufgerufen, damit
+    der Watchlist-Button (und alles andere hier) bei jedem Klick interaktiv
+    bleibt statt nach dem naechsten Rerun spurlos zu verschwinden."""
+    exchange_info = daten["exchange_info"]
+
+    st.subheader(ticker)
+    st.caption(
+        f"Handelsplatz: {exchange_info['handelsplatz']} | Waehrung: {exchange_info['waehrung']} "
+        "-- Achtung bei dual-gelisteten Aktien (z.B. ADS vs. Stammaktie): "
+        "andere Boerse kann einen deutlich anderen Kurs zeigen."
+    )
+
+    if os.environ.get("SUPABASE_URL") and st.session_state.get("user"):
+        user_id = st.session_state.user["id"]
+        auf_watchlist = ticker in get_watchlist(user_id)
+        if auf_watchlist:
+            if st.button("✓ Auf der Watchlist -- entfernen", key=f"wl_toggle_{ticker}"):
+                remove_from_watchlist(user_id, ticker)
+                st.rerun()
+        else:
+            if st.button("☆ Zur Watchlist hinzufügen", key=f"wl_toggle_{ticker}"):
+                add_to_watchlist(user_id, ticker)
+                st.rerun()
+
+    with st.container(border=True):
+        st.plotly_chart(
+            build_chart_figure(ticker, daten["chart_data"], daten["indicators"]),
+            use_container_width=True,
+        )
+        kennzahlen_spalten = st.columns(3)
+        for i, (name, wert) in enumerate(daten["fundamentals_mit_boerse"].items()):
+            with kennzahlen_spalten[i % 3]:
+                st.metric(label=format_label(name), value=format_kennzahl(name, wert))
+
+    st.markdown('<div class="section-label">KI-Einschätzung</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown(daten["antwort"])
+
+    if daten["pfad"]:
+        st.caption(f"Gespeichert unter: {daten['pfad']}")
 
 
 if "analysierte_ticker" not in st.session_state:
     st.session_state.analysierte_ticker = {}
 
-if analysieren and ticker_input:
+if watchlist_ticker_zum_analysieren:
+    berechne_ticker(watchlist_ticker_zum_analysieren)
+elif analysieren and ticker_input:
     for roh_ticker in ticker_input.split(","):
-        ergebnis = analysiere_ticker(roh_ticker)
-        if ergebnis:
-            ticker, indicators, fundamentals_mit_boerse = ergebnis
-            st.session_state.analysierte_ticker[ticker] = (indicators, fundamentals_mit_boerse)
-        st.divider()
+        berechne_ticker(roh_ticker)
 elif analysieren:
     st.warning("Bitte mindestens einen Ticker eingeben.")
+
+# Rendert ALLE bisher berechneten Ticker bei JEDEM Rerun neu -- nicht nur
+# direkt nach der Berechnung -- damit Folge-Interaktionen wie der
+# Watchlist-Button zuverlaessig funktionieren (siehe berechne_ticker()).
+for ticker, daten in st.session_state.analysierte_ticker.items():
+    render_ticker_ergebnis(ticker, daten)
+    st.divider()
 
 
 # --- Eigene Frage an alle konfigurierten KIs (TODO 1 / Approach B) ---
@@ -410,8 +501,10 @@ if st.session_state.analysierte_ticker:
     frage_stellen = st.button("An alle KIs schicken", type="primary")
 
     if frage_stellen and eigene_frage.strip():
-        indicators, fundamentals_mit_boerse = st.session_state.analysierte_ticker[gewaehlter_ticker]
-        prompt = build_freeform_prompt(gewaehlter_ticker, indicators, fundamentals_mit_boerse, eigene_frage)
+        daten = st.session_state.analysierte_ticker[gewaehlter_ticker]
+        prompt = build_freeform_prompt(
+            gewaehlter_ticker, daten["indicators"], daten["fundamentals_mit_boerse"], eigene_frage
+        )
 
         with st.spinner("Frage wird an alle KIs geschickt..."):
             ergebnisse = ask_all_providers(prompt)

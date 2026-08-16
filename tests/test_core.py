@@ -11,7 +11,9 @@ from stock_check.core import (
     build_prompt,
     call_llm,
     compute_indicators,
+    hash_password,
     validate_ticker,
+    verify_password,
     write_output,
 )
 
@@ -262,3 +264,26 @@ def test_write_output_raises_stockcheckerror_on_permission_denied(tmp_path):
             write_output("AAPL", "2026-08-14", "Inhalt", output_dir=output_dir)
     finally:
         os.chmod(output_dir, 0o755)
+
+
+# --- hash_password() / verify_password() -- Accounts + Watchlist ---
+
+
+def test_verify_password_accepts_correct_password():
+    password_hash = hash_password("geheim123")
+    assert verify_password("geheim123", password_hash) is True
+
+
+def test_verify_password_rejects_wrong_password():
+    password_hash = hash_password("geheim123")
+    assert verify_password("falsches_passwort", password_hash) is False
+
+
+def test_hash_password_produces_different_hashes_for_same_password():
+    # bcrypt salzt automatisch -- zwei Hashes desselben Passworts muessen
+    # sich unterscheiden, duerfen aber beide gegen das Original verifizieren.
+    hash1 = hash_password("geheim123")
+    hash2 = hash_password("geheim123")
+    assert hash1 != hash2
+    assert verify_password("geheim123", hash1) is True
+    assert verify_password("geheim123", hash2) is True
